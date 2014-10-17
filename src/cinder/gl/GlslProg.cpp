@@ -937,15 +937,13 @@ std::ostream& operator<<( std::ostream &os, const GlslProg &rhs )
 
 //////////////////////////////////////////////////////////////////////////
 // GlslProgCompileExc
-GlslProgCompileExc::GlslProgCompileExc( const std::string &log, GLint aShaderType ) throw()
-	: mShaderType( aShaderType )
+GlslProgCompileExc::GlslProgCompileExc( const std::string &log, GLint shaderType )
 {
-	if( mShaderType == GL_VERTEX_SHADER )
-		mMessage = "VERTEX: " + log;
-	else if( mShaderType == GL_FRAGMENT_SHADER )
-		mMessage = "FRAGMENT: " + log;
-	else
-		mMessage = "UNKNOWN: " + log;
+	switch( shaderType ) {
+		case GL_VERTEX_SHADER:		setDescription( "VERTEX: " + log ); break;
+		case GL_FRAGMENT_SHADER:	setDescription( "FRAGMENT: " + log ); break;
+		default:					setDescription( "UNKNOWN: " + log ); break;
+	}
 }
 	
 } } // namespace cinder::gl
