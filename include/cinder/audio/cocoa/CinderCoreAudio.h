@@ -37,26 +37,15 @@ namespace cinder { namespace audio { namespace cocoa {
 void printASBD( const ::AudioStreamBasicDescription &asbd );
 
 struct AudioBufferListDeleter {
-	void operator()( ::AudioBufferList *bufferList )
-	{
-		for( size_t i = 0; i < bufferList->mNumberBuffers; i++ )
-			free( bufferList->mBuffers[i].mData );
-		free( bufferList );
-	}
-};
+	void operator()( ::AudioBufferList *bufferList );
 
-struct AudioBufferListShallowDeleter {
-	void operator()( ::AudioBufferList *bufferList )
-	{
-		free( bufferList );
-	}
+	bool mShallow = false;
 };
 
 typedef std::unique_ptr<::AudioBufferList, AudioBufferListDeleter> AudioBufferListPtr;
-typedef std::unique_ptr<::AudioBufferList, AudioBufferListShallowDeleter> AudioBufferListShallowPtr;
 
 AudioBufferListPtr createNonInterleavedBufferList( size_t numFrames, size_t numChannels );
-AudioBufferListShallowPtr createNonInterleavedBufferListShallow( size_t numChannels );
+AudioBufferListPtr createNonInterleavedBufferListShallow( size_t numChannels );
 
 
 ::AudioComponent findAudioComponent( const ::AudioComponentDescription &componentDescription );
@@ -92,8 +81,8 @@ class ConverterImplCoreAudio : public dsp::Converter {
 	ConverterImplCoreAudio( size_t sourceSampleRate, size_t destSampleRate, size_t sourceNumChannels, size_t destNumChannels, size_t sourceMaxFramesPerBlock );
 	virtual ~ConverterImplCoreAudio();
 
-	virtual std::pair<size_t,size_t>	convert( const Buffer *sourceBuffer, Buffer *destBuffer )	override;
-	virtual void						clear()														override;
+	std::pair<size_t,size_t>	convert( const Buffer *sourceBuffer, Buffer *destBuffer )	override;
+	void						clear()														override;
 
   private:
 	std::pair<size_t,size_t> convertComplexImpl( const Buffer *sourceBuffer, Buffer *destBuffer );
@@ -103,7 +92,7 @@ class ConverterImplCoreAudio : public dsp::Converter {
 	const Buffer *mSourceBuffer;
 	size_t mNumReadFramesNeeded, mNumSourceBufferFramesUsed;
 
-	AudioBufferListShallowPtr mOutputBufferList;
+	AudioBufferListPtr mOutputBufferList;
 	::AudioConverterRef mAudioConverter;
 };
 

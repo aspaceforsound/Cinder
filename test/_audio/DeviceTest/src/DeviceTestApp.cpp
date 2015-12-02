@@ -1,40 +1,44 @@
-#include "cinder/app/AppNative.h"
-#include "cinder/gl/gl.h"
+#include "cinder/app/App.h"
+#include "cinder/app/RendererGl.h"
 #include "cinder/Timeline.h"
-
+#include "cinder/Log.h"
 
 #include "cinder/audio/Context.h"
 #include "cinder/audio/GenNode.h"
 #include "cinder/audio/GainNode.h"
 #include "cinder/audio/ChannelRouterNode.h"
 #include "cinder/audio/MonitorNode.h"
+#include "cinder/audio/SampleRecorderNode.h"
 #include "cinder/audio/dsp/Dsp.h"
 #include "cinder/audio/Exception.h"
-#include "cinder/audio/Debug.h"
 
 #include "../../common/AudioTestGui.h"
 
 // TODO: check iOS 6+ interruption handlers via notification
 
+const double RECORD_SECONDS = 2.0;
+
 using namespace ci;
 using namespace ci::app;
 using namespace std;
 
-class DeviceTestApp : public AppNative {
+class DeviceTestApp : public App {
   public:
-	void prepareSettings( Settings *settings );
-	void setup();
-	void update();
-	void draw();
+	void setup() override;
+	void update() override;
+	void draw() override;
 
 	void setOutputDevice( const audio::DeviceRef &device, size_t numChannels = 0 );
 	void setInputDevice( const audio::DeviceRef &device, size_t numChannels = 0 );
 	void setupMultiChannelDevice( const string &deviceName );
 	void setupMultiChannelDeviceWindows( const string &deviceName );
 	void printDeviceDetails( const audio::DeviceRef &device );
+	void startRecording();
+	void writeRecordedToFile();
 
 	void setupSine();
 	void setupNoise();
+	void setupInputPulled();
 	void setupIOClean();
 	void setupIOProcessed();
 	void setupIOAndSine();
@@ -43,19 +47,20 @@ class DeviceTestApp : public AppNative {
 
 	void setupTest( string test );
 	void setupUI();
-	void processTap( Vec2i pos );
-	void processDrag( Vec2i pos );
+	void processTap( ivec2 pos );
+	void processDrag( ivec2 pos );
 	void keyDown( KeyEvent event );
 
 	audio::InputDeviceNodeRef		mInputDeviceNode;
 	audio::OutputDeviceNodeRef		mOutputDeviceNode;
 	audio::MonitorNodeRef			mMonitor;
+	audio::BufferRecorderNodeRef	mRecorder;
 	audio::GainNodeRef				mGain;
 	audio::GenNodeRef				mGen;
 
 	vector<TestWidget *> mWidgets;
 	VSelector mTestSelector, mInputSelector, mOutputSelector;
-	Button mPlayButton;
+	Button mPlayButton, mRecordButton;
 	HSlider mGainSlider;
 	TextInput mSamplerateInput, mFramesPerBlockInput, mNumInChannelsInput, mNumOutChannelsInput, mSendChannelInput;
 
@@ -63,11 +68,6 @@ class DeviceTestApp : public AppNative {
 	Anim<float> mViewYOffset; // for iOS keyboard
 	Rectf mUnderrunRect, mOverrunRect, mClipRect;
 };
-
-void DeviceTestApp::prepareSettings( Settings *settings )
-{
-	settings->setWindowSize( 800, 600 );
-}
 
 void DeviceTestApp::setup()
 {
@@ -87,6 +87,14 @@ void DeviceTestApp::setup()
 
 	//setupMultiChannelDevice( "PreSonus FIREPOD (1431)" );
 //	setupMultiChannelDeviceWindows( "MOTU Analog (MOTU Audio Wave for 64 bit)" );
+
+	mRecorder = ctx->makeNode( new audio::BufferRecorderNode( RECORD_SECONDS * ctx->getSampleRate() ) );
+	mRecorder->setEnabled( false );
+	mGain >> mRecorder;
+
+
+//	setupInputPulled();
+//	setupIOClean();
 
 	PRINT_GRAPH( ctx );
 
@@ -219,6 +227,14 @@ void DeviceTestApp::setupNoise()
 	mGen->enable();
 }
 
+void DeviceTestApp::setupInputPulled()
+{
+	mOutputDeviceNode->disconnectAllInputs();
+
+	mInputDeviceNode >> mGain >> mMonitor;
+	mInputDeviceNode->enable();
+}
+
 void DeviceTestApp::setupIOClean()
 {
 	mInputDeviceNode->connect( mGain );
@@ -290,6 +306,27 @@ void DeviceTestApp::setupSendStereo()
 	mGen->enable();
 }
 
+void DeviceTestApp::startRecording()
+{
+	CI_LOG_I( "begin record..." );
+
+	mRecorder->start();
+	timeline().add( [this] {
+		writeRecordedToFile();
+		mRecorder->disable();
+	}, timeline().getCurrentTime() + RECORD_SECONDS );
+}
+
+void DeviceTestApp::writeRecordedToFile()
+{
+	const string fileName = "recorder_out.wav";
+	CI_LOG_V( "writing to: " << fileName );
+
+	mRecorder->writeToFile( fileName );
+
+	CI_LOG_V( "...complete." );
+}
+
 void DeviceTestApp::setupUI()
 {
 	mInputDeviceNodeUnderrunFade = mInputDeviceNodeOverrunFade = mOutputDeviceNodeClipFade = 0;
@@ -298,8 +335,12 @@ void DeviceTestApp::setupUI()
 	mPlayButton = Button( true, "stopped", "playing" );
 	mWidgets.push_back( &mPlayButton );
 
+	mRecordButton = Button( false, "record" );
+	mWidgets.push_back( &mRecordButton );
+
 	mTestSelector.mSegments.push_back( "sinewave" );
 	mTestSelector.mSegments.push_back( "noise" );
+	mTestSelector.mSegments.push_back( "input (pulled)" );
 	mTestSelector.mSegments.push_back( "I/O (clean)" );
 	mTestSelector.mSegments.push_back( "I/O (processed)" );
 	mTestSelector.mSegments.push_back( "I/O and sine" );
@@ -309,9 +350,11 @@ void DeviceTestApp::setupUI()
 
 #if defined( CINDER_COCOA_TOUCH )
 	mPlayButton.mBounds = Rectf( 0, 0, 120, 60 );
+	mRecordButton.mBounds = Rectf( 130, 0, 190, 34 );
 	mTestSelector.mBounds = Rectf( getWindowWidth() - 190, 0, getWindowWidth(), 180 );
 #else
 	mPlayButton.mBounds = Rectf( 0, 0, 200, 60 );
+	mRecordButton.mBounds = Rectf( 210, 0, 310, 40 );
 	mTestSelector.mBounds = Rectf( getWindowCenter().x + 110, 0, (float)getWindowWidth(), 180 );
 #endif
 
@@ -332,7 +375,7 @@ void DeviceTestApp::setupUI()
 	mWidgets.push_back( &mOutputSelector );
 
 	mInputSelector.mTitle = "Input Devices";
-	mInputSelector.mBounds = mOutputSelector.mBounds - Vec2f( mOutputSelector.mBounds.getWidth() + 10, 0 );
+	mInputSelector.mBounds = mOutputSelector.mBounds - vec2( mOutputSelector.mBounds.getWidth() + 10, 0 );
 	if( mOutputDeviceNode ) {
 		for( const auto &dev : audio::Device::getInputDevices() ) {
 			if( dev == mInputDeviceNode->getDevice() )
@@ -348,36 +391,36 @@ void DeviceTestApp::setupUI()
 	mSamplerateInput.setValue( audio::master()->getSampleRate() );
 	mWidgets.push_back( &mSamplerateInput );
 
-	textInputBounds += Vec2f( 0, textInputBounds.getHeight() + 24 );
+	textInputBounds += vec2( 0, textInputBounds.getHeight() + 24 );
 	mFramesPerBlockInput.mBounds = textInputBounds;
 	mFramesPerBlockInput.mTitle = "frames per block";
 	mFramesPerBlockInput.setValue( audio::master()->getFramesPerBlock() );
 	mWidgets.push_back( &mFramesPerBlockInput );
 
-	textInputBounds += Vec2f( 0, textInputBounds.getHeight() + 24 );
+	textInputBounds += vec2( 0, textInputBounds.getHeight() + 24 );
 	mNumInChannelsInput.mBounds = textInputBounds;
 	mNumInChannelsInput.mTitle = "num inputs";
 	if( mInputDeviceNode )
 		mNumInChannelsInput.setValue( mInputDeviceNode->getNumChannels() );
 	mWidgets.push_back( &mNumInChannelsInput );
 
-	textInputBounds += Vec2f( 0, textInputBounds.getHeight() + 24 );
+	textInputBounds += vec2( 0, textInputBounds.getHeight() + 24 );
 	mNumOutChannelsInput.mBounds = textInputBounds;
 	mNumOutChannelsInput.mTitle = "num outputs";
 	if( mOutputDeviceNode )
 		mNumOutChannelsInput.setValue( mOutputDeviceNode->getNumChannels() );
 	mWidgets.push_back( &mNumOutChannelsInput );
 
-	textInputBounds += Vec2f( 0, textInputBounds.getHeight() + 24 );
+	textInputBounds += vec2( 0, textInputBounds.getHeight() + 24 );
 	mSendChannelInput.mBounds = textInputBounds;
 	mSendChannelInput.mTitle = "send channel";
 	mSendChannelInput.setValue( 2 );
 	mWidgets.push_back( &mSendChannelInput );
 
-	Vec2f xrunSize( 80, 26 );
+	vec2 xrunSize( 80, 26 );
 	mUnderrunRect = Rectf( 0, mPlayButton.mBounds.y2 + 10, xrunSize.x, mPlayButton.mBounds.y2 + xrunSize.y + 10 );
-	mOverrunRect = mUnderrunRect + Vec2f( xrunSize.x + 10, 0 );
-	mClipRect = mOverrunRect + Vec2f( xrunSize.x + 10, 0 );
+	mOverrunRect = mUnderrunRect + vec2( xrunSize.x + 10, 0 );
+	mClipRect = mOverrunRect + vec2( xrunSize.x + 10, 0 );
 
 	getWindow()->getSignalMouseDown().connect( [this] ( MouseEvent &event ) { processTap( event.getPos() ); } );
 	getWindow()->getSignalMouseDrag().connect( [this] ( MouseEvent &event ) { processDrag( event.getPos() ); } );
@@ -395,17 +438,19 @@ void DeviceTestApp::setupUI()
 	gl::enableAlphaBlending();
 }
 
-void DeviceTestApp::processDrag( Vec2i pos )
+void DeviceTestApp::processDrag( ivec2 pos )
 {
 	if( mGainSlider.hitTest( pos ) )
 		mGain->getParam()->applyRamp( mGainSlider.mValueScaled, 0.025f );
 }
 
-void DeviceTestApp::processTap( Vec2i pos )
+void DeviceTestApp::processTap( ivec2 pos )
 {
 //	TextInput *selectedInput = false;
 	if( mPlayButton.hitTest( pos ) )
 		audio::master()->setEnabled( ! audio::master()->isEnabled() );
+	else if( mRecordButton.hitTest( pos ) )
+		startRecording();
 	else if( mSamplerateInput.hitTest( pos ) ) {
 	}
 	else if( mFramesPerBlockInput.hitTest( pos ) ) {
@@ -469,6 +514,8 @@ void DeviceTestApp::setupTest( string test )
 		setupSine();
 	else if( test == "noise" )
 		setupNoise();
+	else if( test == "input (pulled)" )
+		setupInputPulled();
 	else if( test == "I/O (clean)" )
 		setupIOClean();
 	else if( test == "I/O (processed)" )
@@ -583,7 +630,7 @@ void DeviceTestApp::draw()
 			for( size_t i = 0; i < buffer.getNumFrames(); i++ ) {
 				float x = i * xScale;
 				float y = ( channel[i] * 0.5f + 0.5f ) * waveHeight + yOffset;
-				waveform.push_back( Vec2f( x, y ) );
+				waveform.push_back( vec2( x, y ) );
 			}
 			gl::draw( waveform );
 			yOffset += waveHeight + padding;
@@ -615,4 +662,7 @@ void DeviceTestApp::draw()
 	gl::popMatrices();
 }
 
-CINDER_APP_NATIVE( DeviceTestApp, RendererGl )
+CINDER_APP( DeviceTestApp, RendererGl, []( App::Settings *settings ) {
+	settings->setWindowSize( 800, 600 );
+	settings->setWindowPos( 10, 10 );
+} )

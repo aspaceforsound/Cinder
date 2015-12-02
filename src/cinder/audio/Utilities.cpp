@@ -24,6 +24,8 @@
 #include "cinder/audio/Utilities.h"
 #include "cinder/CinderMath.h"
 
+using namespace std;
+
 namespace cinder { namespace audio {
 
 const float kGainNegative100Decibels = 0.00001f; // linear gain equal to -100db
@@ -69,6 +71,11 @@ float midiToFreq( float midi )
 {
 	float m = math<float>::clamp( midi, -1499, 1499 );
 	return 8.17579891564f * math<float>::exp( .0577622650f * m );
+}
+
+uint64_t timeToFrame( double timeSeconds, double sampleRate )
+{
+	return static_cast<uint64_t>( lround( timeSeconds * sampleRate ) );
 }
 
 bool thresholdBuffer( const Buffer &buffer, float threshold, size_t *recordFrame )

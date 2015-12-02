@@ -24,7 +24,6 @@
 #include "cinder/audio/cocoa/DeviceManagerCoreAudio.h"
 #include "cinder/cocoa/CinderCocoa.h"
 #include "cinder/audio/Exception.h"
-#include "cinder/audio/Debug.h"
 #include "cinder/CinderAssert.h"
 
 using namespace std;
@@ -184,15 +183,16 @@ void DeviceManagerCoreAudio::setSampleRate( const DeviceRef &device, size_t samp
 {
 	::AudioDeviceID deviceId = mDeviceIds.at( device );
 
+	// If the device can't be set to this sampleRate, we leave it alone,
+	// users should check if sampleRate was actually updated if necessary
 	auto acceptable = getAcceptableSampleRates( deviceId );
-	if( find( acceptable.begin(), acceptable.end(), sampleRate ) == acceptable.end() )
-		throw AudioDeviceExc( "Invalid samplerate." );
+	if( find( acceptable.begin(), acceptable.end(), sampleRate ) != acceptable.end() ) {
+		mUserHasModifiedFormat = true;
 
-	mUserHasModifiedFormat = true;
-
-	::AudioObjectPropertyAddress property = getAudioObjectPropertyAddress( kAudioDevicePropertyNominalSampleRate );
-	Float64 data = static_cast<Float64>( sampleRate );
-	setAudioObjectProperty( deviceId, property, data );
+		::AudioObjectPropertyAddress property = getAudioObjectPropertyAddress( kAudioDevicePropertyNominalSampleRate );
+		Float64 data = static_cast<Float64>( sampleRate );
+		setAudioObjectProperty( deviceId, property, data );
+	}
 }
 
 size_t DeviceManagerCoreAudio::getFramesPerBlock( const DeviceRef &device )
